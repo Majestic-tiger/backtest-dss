@@ -1,9 +1,9 @@
 {
-  "start_date": "2026-02-09",
-  "init_cash": 28000.0,
+  "start_date": "2026-01-27",
   "log_scale": true,
-  "spread_buy_levels": 5,
-  "spread_buy_step": 1,
+  "allow_fractional": false,
   "enable_netting": true,
-  "allow_fractional": false
+  "init_cash": 2200.0,
+  "spread_buy_levels": 5,
+  "spread_buy_step": 2
 }
