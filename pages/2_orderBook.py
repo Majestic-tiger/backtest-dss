@@ -743,7 +743,16 @@ current_mode = _normalize_mode(mode_raw_value)
 current_cash = _safe_float(last_row.get("현금")) or float(ui_values["init_cash"])
 current_position_qty = _safe_int(last_row.get("보유수량"))
 prev_close = _safe_float(last_row.get("종가"))
-tranche_budget = _safe_float(last_row.get("일일트렌치예산"))
+
+# Compute next-day tranche budget from tranche_base_cash (end-of-day value).
+# The journal's 일일트렌치예산 is the START-of-day value and may be stale
+# if sells happened during the day (which resets tranche_base_cash to cash).
+_tranche_base = _safe_float(last_row.get("트렌치기반현금"))
+if _tranche_base and _tranche_base > 0:
+    _next_slices = int(ui_values["defense_slices"]) if current_mode == "defense" else int(ui_values["offense_slices"])
+    tranche_budget = _tranche_base / max(1, _next_slices)
+else:
+    tranche_budget = _safe_float(last_row.get("일일트렌치예산"))
 
 # Get RSI value
 rsi_value = None
@@ -921,6 +930,8 @@ if not open_trades.empty and prev_close:
                     "비고": f"잔여일: {days_left}일"
                 })
 
+_spread_ctx = None  # Context for spread generation (set in buy section, used after netting)
+
 # Add buy order (new tranche) + spread at lower prices
 if current_cash > 0 and tranche_budget and tranche_budget > 0:
     mode_params = ui_values["defense_buy"] if current_mode == "defense" else ui_values["offense_buy"]
@@ -949,38 +960,14 @@ if current_cash > 0 and tranche_budget and tranche_budget > 0:
                 "비고": f"→ TP: ${new_tp:.2f}, SL: ${new_sl:.2f}" if new_sl else f"→ TP: ${new_tp:.2f}"
             })
 
-            # Spread rows using formula: price = daily_budget / (base_qty + N * step)
-            # Each row represents buying `step` additional shares at that price level
-            # Formula: 추가 매수 가격 = 일일 투자금 ÷ (기본 수량 + N × step)
-            daily_budget = effective_budget
-            max_spread_orders = ui_values.get("spread_buy_levels", 5)
-            spread_step = ui_values.get("spread_buy_step", 1)
-            min_drop_pct = -50.0  # Stop adding spread orders beyond 50% drop
-
-            for n in range(1, max_spread_orders + 1):
-                shares_increment = n * spread_step
-                spread_price = daily_budget / (base_qty + shares_increment)
-
-                # Calculate drop percentage from base price
-                drop_pct = ((spread_price / buy_limit_price) - 1) * 100
-                if drop_pct < min_drop_pct:
-                    break
-
-                spread_tp = spread_price * (1 + tp_pct / 100)
-                spread_sl = spread_price * (1 - sl_pct / 100) if sl_pct > 0 else None
-                pct_from_prev = ((spread_price / prev_close) - 1) * 100 if prev_close else 0
-
-                note = f"TP: ${spread_tp:.2f}"
-                if spread_sl:
-                    note += f", SL: ${spread_sl:.2f}"
-
-                order_sheet.append({
-                    "구분": f"매수 (+{shares_increment}주)",
-                    "주문가": spread_price,
-                    "수량": spread_step,
-                    "변화율": f"{pct_from_prev:+.1f}%",
-                    "비고": note,
-                })
+            # Save context for spread generation (after netting determines reference price)
+            _spread_ctx = {
+                "buy_limit_price": buy_limit_price,
+                "effective_budget": effective_budget,
+                "base_qty": base_qty,
+                "tp_pct": tp_pct,
+                "sl_pct": sl_pct,
+            }
 
 # Apply netting: offset matching sell and base-buy quantities in-place
 # IMPORTANT: Netting only applies when sell_price <= buy_price (overlapping execution range)
@@ -988,6 +975,7 @@ if current_cash > 0 and tranche_budget and tranche_budget > 0:
 # Both can execute at the same close only when sell_price <= close <= buy_price
 netting_msg = ""
 netting_details: list[dict] = []  # tracks per-row netting for debugging
+netting_floor_price = None  # Price of netting "매수" scenario row
 
 if enable_netting:
     sell_indices = [i for i, r in enumerate(order_sheet) if r["구분"].startswith("매도")]
@@ -1111,9 +1099,10 @@ if enable_netting:
 
             # ① Below all sell prices: only buy executes
             min_sell_price = sorted_sells[0][0]
+            netting_floor_price = min_sell_price - 0.01
             ranges.append({
-                "구분": "매수 (전량)",
-                "주문가": min_sell_price - 0.01,
+                "구분": "매수",
+                "주문가": netting_floor_price,
                 "수량": total_buy_qty,
                 "비고": f"종가 < ${min_sell_price:.2f} 시 매도미체결 → 전량매수",
             })
@@ -1132,7 +1121,7 @@ if enable_netting:
                 if net > 0:
                     next_sp = next(s for s, _ in sorted_sells if s > sp)
                     ranges.append({
-                        "구분": "순매수",
+                        "구분": "매수",
                         "주문가": sp,
                         "수량": net_qty,
                         "비고": f"종가 ${sp:.2f}~${next_sp:.2f} 구간 (매도 {fmt_qty(cum_sell)}주 체결)",
@@ -1140,7 +1129,7 @@ if enable_netting:
                 elif net < 0:
                     next_sp = next(s for s, _ in sorted_sells if s > sp)
                     ranges.append({
-                        "구분": "순매도",
+                        "구분": "매도",
                         "주문가": sp,
                         "수량": net_qty,
                         "비고": f"종가 ${sp:.2f}~${next_sp:.2f} 구간 (매도 {fmt_qty(cum_sell)}주 체결)",
@@ -1151,7 +1140,7 @@ if enable_netting:
             if not allow_fractional:
                 total_sell_qty = int(total_sell_qty)
             ranges.append({
-                "구분": "매도 (전량)",
+                "구분": "매도",
                 "주문가": buy_price + 0.01,
                 "수량": total_sell_qty,
                 "비고": f"종가 > ${buy_price:.2f} 시 매수미체결 → 전량매도",
@@ -1170,6 +1159,47 @@ if enable_netting:
                     "변화율": f"{pct:+.1f}%",
                     "비고": r["비고"],
                 })
+
+# Generate spread buy orders (after netting to use correct reference price)
+if _spread_ctx is not None:
+    _ref_price = netting_floor_price if netting_floor_price else _spread_ctx["buy_limit_price"]
+    _eff_budget = _spread_ctx["effective_budget"]
+    _s_tp_pct = _spread_ctx["tp_pct"]
+    _s_sl_pct = _spread_ctx["sl_pct"]
+
+    if allow_fractional:
+        _ref_qty = _eff_budget / _ref_price
+    else:
+        _ref_qty = int(_eff_budget // _ref_price)
+
+    _max_spread = ui_values.get("spread_buy_levels", 5)
+    _s_step = ui_values.get("spread_buy_step", 1)
+    _min_drop_pct = -50.0
+
+    if _ref_qty > 0:
+        for _n in range(1, _max_spread + 1):
+            _incr = _n * _s_step
+            _sp_price = _eff_budget / (_ref_qty + _incr)
+
+            _drop = ((_sp_price / _ref_price) - 1) * 100
+            if _drop < _min_drop_pct:
+                break
+
+            _sp_tp = _sp_price * (1 + _s_tp_pct / 100)
+            _sp_sl = _sp_price * (1 - _s_sl_pct / 100) if _s_sl_pct > 0 else None
+            _pct = ((_sp_price / prev_close) - 1) * 100 if prev_close else 0
+
+            _note = f"TP: ${_sp_tp:.2f}"
+            if _sp_sl:
+                _note += f", SL: ${_sp_sl:.2f}"
+
+            order_sheet.append({
+                "구분": f"매수 (+{_incr}주)",
+                "주문가": _sp_price,
+                "수량": _s_step,
+                "변화율": f"{_pct:+.1f}%",
+                "비고": _note,
+            })
 
 # Display order sheet
 if order_sheet:
@@ -1212,9 +1242,9 @@ if netting_details:
             "주문 시트의 각 행은 **종가 구간별 순결과**를 보여줍니다.\n\n"
             "예시: 매수 \\$100 500주, 매도(TP) \\$98 300주일 때\n"
             "```\n"
-            "매도 (전량)  $100.01  300주  종가 > $100 시 매수미체결 → 전량매도\n"
-            "매수         $100.00  200주  퉁치기 후 순매수 (종가 $98~$100)\n"
-            "매수 (전량)   $97.99  500주  종가 < $98 시 매도미체결 → 전량매수\n"
+            "매도   $100.01  300주  종가 > $100 시 매수미체결 → 전량매도\n"
+            "매수   $100.00  200주  퉁치기 후 순매수 (종가 $98~$100)\n"
+            "매수    $97.99  500주  종가 < $98 시 매도미체결 → 전량매수\n"
             "```\n\n"
             "| 종가 구간 | 결과 |\n"
             "|-----------|------|\n"
@@ -1222,8 +1252,8 @@ if netting_details:
             "| \\$98 ~ \\$100 | 둘 다 체결 → **순매수 200주** (퉁치기) |\n"
             "| > \\$100 | 매수 미체결 → **300주 전량매도** |\n\n"
             "**주문가 = 시나리오 가격 경계**\n"
-            "- 매수 (전량): `최소매도가 - \\$0.01` — 이 가격 이하면 매도 미체결\n"
-            "- 매도 (전량): `매수가 + \\$0.01` — 이 가격 이상이면 매수 미체결\n\n"
+            "- 매수 (하단): `최소매도가 - \\$0.01` — 이 가격 이하면 매도 미체결\n"
+            "- 매도 (상단): `매수가 + \\$0.01` — 이 가격 이상이면 매수 미체결\n\n"
             "**퉁치기 불가**: 매도가 > 매수가이면 겹치는 구간이 없어 각각 독립 체결"
         )
 

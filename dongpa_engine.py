@@ -727,6 +727,7 @@ class DongpaBacktester:
                 "누적수익률(%)": cumulative_return,
                 "낙폭(DD%)": drawdown_pct,
                 "일일트렌치예산": money_to_float(tranche_budget),
+                "트렌치기반현금": money_to_float(tranche_base_cash),
                 "TP평균(보유)": money_to_float(tp_avg_open) if tp_avg_open is not None else None,
                 "원매수수량": shares_to_float(raw_buy_qty, self.p.allow_fractional_shares),
                 "원매수금액": money_to_float(raw_buy_amt) if raw_buy_qty > Decimal("0") else 0.0,
