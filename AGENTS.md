@@ -3,11 +3,11 @@
 ## Project Structure & Module Organization
 - `backtest.py` drives the Streamlit UI plus user inputs; keep view-layer helpers beside it and move shared logic into `dongpa_engine.py`.
 - `dongpa_engine.py` houses the backtesting engine, dataclasses, and signal helpers. Add future analytics as flat modules in the repo root and import directly.
-- Tooling (`requirements.txt`, `Dockerfile`, `Makefile`) sits next to the source for quick builds. Store generated CSVs or notebooks under `outputs/` and ignore that directory in git.
+- Tooling (`pyproject.toml`, `Dockerfile`, `Makefile`) sits next to the source for quick builds. Store generated CSVs or notebooks under `outputs/` and ignore that directory in git.
 - Put automated checks in `tests/` with filenames such as `tests/test_engine.py` so ownership remains obvious.
 
 ## Build, Test, and Development Commands
-- `python -m pip install -r requirements.txt`: install dependencies for local runs.
+- `uv sync`: install dependencies for local runs.
 - `streamlit run backtest.py`: launch the dashboard without Docker for fast iteration.
 - `make build`: produce the `dongpa:latest` image; re-run after dependency or system changes.
 - `make run`: serve the container on `http://localhost:8501`; use `make bash` for an interactive container shell and `make clean` to remove the image when done.
@@ -32,5 +32,5 @@
 - Be mindful of Yahoo Finance rate limits and avoid committing large CSV exports or proprietary datasets.
 
 ## Documentation Map
-- `dongpa_strategy.md`: 전략 로직과 파라미터, 위험관리 규칙을 정리한 참고 문서.
-- `dongpa_visualize.md`: Streamlit 대시보드 구성, 요약 지표 배치, 출력 컬럼 정의 등 UI 관련 지침.
+- `docs/dongpa_strategy.md`: 전략 로직과 파라미터, 위험관리 규칙을 정리한 참고 문서.
+- `docs/dongpa_visualize.md`: Streamlit 대시보드 구성, 요약 지표 배치, 출력 컬럼 정의 등 UI 관련 지침.

@@ -18,7 +18,7 @@ Dongpa is a Streamlit-based backtesting application for the "동파법" (Dongpa 
 ### Main Modules
 
 **`dongpa_engine.py`** - Backtesting engine and core logic
-- `DongpaBacktester` class: Main backtest orchestrator
+- `run_backtest()`: Main backtest entry point (pure function)
 - `ModeParams`: Mode-specific parameters (buy_cond_pct, tp_pct, max_hold_days, slices, stop_loss_pct)
 - `CapitalParams`: Capital management (`initial_cash` only)
 - `StrategyParams`: Complete strategy configuration
@@ -54,7 +54,7 @@ Dongpa is a Streamlit-based backtesting application for the "동파법" (Dongpa 
 
 ### Local Development
 ```bash
-make install          # Install Python dependencies (requirements.txt)
+make install          # Install Python dependencies (uv sync)
 make run-local        # Run Streamlit on localhost:8501 (no Docker)
 streamlit run backtest.py --server.address=0.0.0.0 --server.port=8501
 ```
@@ -141,23 +141,29 @@ PORT=9000 make run
 backtest-dss/
 ├── backtest.py              # Main Streamlit dashboard
 ├── dongpa_engine.py         # Core backtest engine
-├── dongpa_optuna.py         # Optuna-based optimizer engine
+├── dongpa_optuna.py         # Optuna optimizer engine
+├── ui_common.py             # Shared UI utilities
+├── chart_utils.py           # Chart building
+├── run_optuna.py            # CLI for Optuna
 ├── pages/
 │   ├── 2_orderBook.py      # LOC order scheduler
 │   └── 3_Optuna.py         # Optuna optimizer UI
+├── tests/                   # pytest suite
 ├── config/
-│   ├── strategy.json               # Strategy parameters config
-│   ├── personal_settings.json         # Personal settings (start_date, init_cash, etc.)
-│   └── order_book_history.csv      # Order history log
+│   ├── strategy.json        # Strategy parameters config
+│   ├── personal_settings.json # Personal settings
+│   └── order_book_history.csv # Order history log
+├── docs/                    # Documentation
+│   ├── dongpa_strategy.md   # Strategy rules (Korean)
+│   └── dongpa_visualize.md  # UI layout guide
 ├── outputs/                 # Downloaded price data & results (gitignored)
-├── requirements.txt         # Python dependencies
-├── Makefile                # Build & run helpers
-├── Dockerfile              # Production container
-├── Dockerfile.dev          # Dev container with mount
-├── dongpa_strategy.md      # Strategy documentation (Korean)
-├── dongpa_visualize.md     # UI layout guide
-├── AGENTS.md               # Repository guidelines
-└── strategy_performance.md # Optimizer output (generated)
+├── pyproject.toml           # Dependencies & project metadata
+├── Makefile                 # Build & run helpers
+├── Dockerfile               # Production container
+├── Dockerfile.dev           # Dev container with mount
+├── CLAUDE.md                # Claude Code instructions
+├── AGENTS.md                # Repository guidelines
+└── strategy_performance.md  # Optimizer output (generated)
 ```
 
 ## Important Notes
@@ -188,7 +194,7 @@ backtest-dss/
 
 ## Documentation References
 
-- **dongpa_strategy.md**: Complete strategy rules, mode logic, parameter definitions (Korean)
-- **dongpa_visualize.md**: UI layout, metric descriptions, output column definitions
+- **docs/dongpa_strategy.md**: Complete strategy rules, mode logic, parameter definitions (Korean)
+- **docs/dongpa_visualize.md**: UI layout, metric descriptions, output column definitions
 - **AGENTS.md**: Repository conventions, commit style, testing guidelines
 - **strategy_performance.md**: Latest optimizer results (auto-generated)

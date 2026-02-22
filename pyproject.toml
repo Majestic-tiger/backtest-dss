@@ -8,6 +8,7 @@ dependencies = [
     "yfinance",
     "pandas",
     "numpy",
+    "optuna",
 ]
 
 [dependency-groups]
