@@ -16,7 +16,7 @@ import optuna
 import pandas as pd
 import yfinance as yf
 
-from dongpa_engine import (
+from engines.dongpa_engine import (
     CapitalParams,
     ModeParams,
     StrategyParams,

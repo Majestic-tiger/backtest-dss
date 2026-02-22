@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,10 +10,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-from dongpa_engine import (
-    CapitalParams,
-    ModeParams,
-    StrategyParams,
+from engines.dongpa_engine import (
     _scalar,
     summarize,
     run_backtest,
@@ -23,63 +19,29 @@ from dongpa_engine import (
     compute_equity_return,
     compute_trade_metrics,
 )
-from chart_utils import (
+from ui.charts import (
     EquityPriceChartConfig,
     prepare_equity_price_frames,
     build_equity_price_chart,
 )
-from ui_common import (
+from ui.common import (
     CONFIG_DIR,
     LOCAL_KEYS,
     LOOKBACK_DAYS,
     compute_trade_metrics,
+    build_strategy_params,
     get_available_config_files,
     load_settings,
     render_navigation,
     save_settings,
 )
-
-
-def _safe_int(value: object) -> int:
-    try:
-        if value is None:
-            return 0
-        if isinstance(value, float) and math.isnan(value):
-            return 0
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _safe_float(value: object) -> float | None:
-    try:
-        if value is None:
-            return None
-        if isinstance(value, float) and math.isnan(value):
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-MODE_ALIASES = {
-    "안전": "defense",
-    "defense": "defense",
-    "공세": "offense",
-    "offense": "offense",
-}
-
-
-def _normalize_mode(value: object) -> str:
-    """Map journal mode labels (Korean or English) to canonical keys."""
-    if isinstance(value, str):
-        trimmed = value.strip()
-        lowered = trimmed.lower()
-        if lowered in MODE_ALIASES:
-            return MODE_ALIASES[lowered]
-        if trimmed in MODE_ALIASES:
-            return MODE_ALIASES[trimmed]
-    return "defense"
+from engines.order_book_engine import (
+    extract_state,
+    build_holdings,
+    build_order_sheet,
+    apply_netting,
+    build_spread_orders,
+)
 
 
 def _is_market_closed_today() -> bool:
@@ -135,70 +97,6 @@ def _prepare_defaults(saved: dict) -> dict:
         "btc_lookback_days": int(saved.get("btc_lookback_days", 1)),
         "btc_threshold_pct": float(saved.get("btc_threshold_pct", 0.0)),
     }
-
-
-def _collect_params(ui_values: dict) -> tuple[StrategyParams, CapitalParams]:
-    defense = ModeParams(
-        buy_cond_pct=ui_values["defense_buy"],
-        tp_pct=ui_values["defense_tp"],
-        max_hold_days=int(ui_values["defense_hold"]),
-        slices=int(ui_values["defense_slices"]),
-        stop_loss_pct=float(ui_values["defense_sl"]) if ui_values["defense_sl"] > 0 else None,
-    )
-    offense = ModeParams(
-        buy_cond_pct=ui_values["offense_buy"],
-        tp_pct=ui_values["offense_tp"],
-        max_hold_days=int(ui_values["offense_hold"]),
-        slices=int(ui_values["offense_slices"]),
-        stop_loss_pct=float(ui_values["offense_sl"]) if ui_values["offense_sl"] > 0 else None,
-    )
-
-    # Build strategy params based on mode switching strategy
-    strategy_dict = {
-        "target_ticker": ui_values["target"],
-        "momentum_ticker": ui_values["momentum"],
-        "enable_netting": True,
-        "allow_fractional_shares": ui_values["allow_fractional"],
-        "cash_limited_buy": ui_values.get("cash_limited_buy", False),
-        "defense": defense,
-        "offense": offense,
-    }
-
-    # Add mode switch strategy parameters
-    if ui_values.get("mode_switch_strategy") == "Golden Cross":
-        strategy_dict.update({
-            "mode_switch_strategy": "ma_cross",
-            "ma_short_period": int(ui_values["ma_short"]),
-            "ma_long_period": int(ui_values["ma_long"]),
-        })
-    elif ui_values.get("mode_switch_strategy") == "ROC":
-        strategy_dict.update({
-            "mode_switch_strategy": "roc",
-            "roc_period": int(ui_values.get("roc_period", 4)),
-        })
-    elif ui_values.get("mode_switch_strategy") == "BTC Overnight":
-        strategy_dict.update({
-            "mode_switch_strategy": "btc_overnight",
-            "btc_lookback_days": int(ui_values.get("btc_lookback_days", 1)),
-            "btc_threshold_pct": float(ui_values.get("btc_threshold_pct", 0.0)),
-        })
-    else:
-        strategy_dict.update({
-            "mode_switch_strategy": "rsi",
-            "rsi_period": 14,
-            "rsi_high_threshold": float(ui_values.get("rsi_high_threshold", 65.0)),
-            "rsi_mid_high": float(ui_values.get("rsi_mid_high", 60.0)),
-            "rsi_neutral": float(ui_values.get("rsi_neutral", 50.0)),
-            "rsi_mid_low": float(ui_values.get("rsi_mid_low", 40.0)),
-            "rsi_low_threshold": float(ui_values.get("rsi_low_threshold", 35.0)),
-        })
-
-    strategy = StrategyParams(**strategy_dict)
-
-    capital = CapitalParams(initial_cash=float(ui_values["init_cash"]))
-    return strategy, capital
-
-
 
 
 st.set_page_config(page_title="orderBook", layout="wide")
@@ -636,6 +534,7 @@ ui_values = {
     "momentum": momentum.strip().upper(),
     "bench": bench.strip().upper(),
     "allow_fractional": allow_fractional,
+    "enable_netting": enable_netting,
     "cash_limited_buy": cash_limited_buy,
     "init_cash": init_cash,
     "defense_slices": def_slice,
@@ -673,19 +572,16 @@ elif mode_switch_strategy == "ROC":
 
 
 # Calculate data fetch range
-# We need extra data before start_date for RSI calculation (at least 100 days for weekly RSI with 14 period)
 data_fetch_start = start_date - timedelta(days=LOOKBACK_DAYS)
 
 # Check if market has closed today using timezone
 market_closed_today = _is_market_closed_today()
 
 if market_closed_today:
-    # Market has closed, so today's data should be available
     backtest_end_date = today
     end_fetch = today + timedelta(days=1)
     market_started = False
 else:
-    # Market hasn't closed yet, use yesterday's data
     backtest_end_date = today - timedelta(days=1)
     end_fetch = today
     market_started = True
@@ -724,10 +620,8 @@ if df_target_filtered.empty:
     st.error(f"{start_date}부터 {backtest_end_date}까지 데이터가 없습니다. 시작일을 확인해주세요.")
     st.stop()
 
-strategy, capital = _collect_params(ui_values)
-# Pass full df_momo for proper RSI/MA warm-up; df_target_filtered defines backtest period
+strategy, capital = build_strategy_params(ui_values)
 bt_result = run_backtest(df_target_filtered, df_momo, strategy, capital, btc_data=df_btc)
-# Also compute indicators for mode display in UI
 _, _indicators = compute_indicators(df_target_filtered, df_momo, strategy, btc_data=df_btc)
 journal = bt_result.journal
 trade_log = bt_result.trade_log
@@ -736,48 +630,22 @@ if journal.empty:
     st.warning("거래 기록이 없습니다.")
     st.stop()
 
-# Get last trading day state
-journal["거래일자"] = pd.to_datetime(journal["거래일자"], errors="coerce")
-last_row = journal.iloc[-1].copy()
-last_date = last_row["거래일자"].date()
-last_timestamp = pd.Timestamp(last_date)
-
-# Extract current state from last row
-mode_raw_value = last_row.get("모드", "안전")
-current_mode = _normalize_mode(mode_raw_value)
-current_cash = _safe_float(last_row.get("현금")) or float(ui_values["init_cash"])
-current_position_qty = _safe_int(last_row.get("보유수량"))
-prev_close = _safe_float(last_row.get("종가"))
-
-# Compute next-day tranche budget from tranche_base_cash (end-of-day value).
-# The journal's 일일트렌치예산 is the START-of-day value and may be stale
-# if sells happened during the day (which resets tranche_base_cash to cash).
-_tranche_base = _safe_float(last_row.get("트렌치기반현금"))
-if _tranche_base and _tranche_base > 0:
-    _next_slices = int(ui_values["defense_slices"]) if current_mode == "defense" else int(ui_values["offense_slices"])
-    tranche_budget = _tranche_base / max(1, _next_slices)
-else:
-    tranche_budget = _safe_float(last_row.get("일일트렌치예산"))
-
-# Get RSI value
-rsi_value = None
-if _indicators.daily_rsi is not None and last_timestamp in _indicators.daily_rsi.index:
-    rsi_raw = _scalar(_indicators.daily_rsi.loc[last_timestamp])
-    if rsi_raw is not None and not pd.isna(rsi_raw):
-        rsi_value = float(rsi_raw)
+# Extract state via order_book_engine
+state = extract_state(journal, _indicators, ui_values, float(ui_values["init_cash"]))
 
 # Get open positions from trade_log
 open_trades = trade_log[trade_log.get("상태") != "완료"].copy() if not trade_log.empty else pd.DataFrame()
 
 # Show header
-st.subheader(f"백테스트 결과 ({start_date} ~ {last_date})")
+st.subheader(f"백테스트 결과 ({start_date} ~ {state.last_date})")
 if market_started:
-    st.info(f"⏰ 오늘({today}) 장이 진행 중입니다. {last_date}까지의 보유 포지션을 표시하고, 오늘 마감 시 실행될 LOC 주문을 아래에서 확인하세요.")
+    st.info(f"⏰ 오늘({today}) 장이 진행 중입니다. {state.last_date}까지의 보유 포지션을 표시하고, 오늘 마감 시 실행될 LOC 주문을 아래에서 확인하세요.")
 
-mode_label = "공세" if current_mode == "offense" else "안전"
+mode_label = "공세" if state.current_mode == "offense" else "안전"
 mode_line = f"현재 모드: **{mode_label}**"
 
 # Show mode indicator based on strategy
+last_timestamp = pd.Timestamp(state.last_date)
 if ui_values.get("mode_switch_strategy") == "Golden Cross":
     mode_line += f" (Golden Cross 전략: {ui_values['ma_short']}주 × {ui_values['ma_long']}주 MA)"
 elif ui_values.get("mode_switch_strategy") == "ROC":
@@ -800,74 +668,27 @@ elif ui_values.get("mode_switch_strategy") == "BTC Overnight":
         mode_line += f" (BTC signal {btc_sig_val:+.4f}, lookback {ui_values.get('btc_lookback_days', 1)}일)"
     else:
         mode_line += f" (BTC Overnight, lookback {ui_values.get('btc_lookback_days', 1)}일)"
-elif rsi_value is not None:
-    mode_line += f" (주봉 RSI {rsi_value:.2f})"
+elif state.rsi_value is not None:
+    mode_line += f" (주봉 RSI {state.rsi_value:.2f})"
 
 st.markdown(mode_line)
-if prev_close is not None:
-    st.markdown(f"최근 종가 ({last_date}): **${prev_close:,.2f}**")
-st.markdown(f"잔여 현금: **${current_cash:,.2f}**, 보유 수량: **{current_position_qty}주**")
-if tranche_budget:
-    st.markdown(f"현재 트렌치 예산: **${tranche_budget:,.2f}**")
+if state.prev_close is not None:
+    st.markdown(f"최근 종가 ({state.last_date}): **${state.prev_close:,.2f}**")
+st.markdown(f"잔여 현금: **${state.current_cash:,.2f}**, 보유 수량: **{state.current_position_qty}주**")
+if state.tranche_budget:
+    st.markdown(f"현재 트렌치 예산: **${state.tranche_budget:,.2f}**")
 
 st.markdown("---")
 
 # Show current holdings
 st.subheader("보유 포지션 현황")
-if not open_trades.empty and prev_close:
-    holdings = []
-    for _, trade in open_trades.iterrows():
-        buy_date = trade.get("매수일자", "")
-        buy_price = _safe_float(trade.get("매수체결가"))
-        buy_qty = _safe_int(trade.get("매수수량", 0))
-        tp_price = _safe_float(trade.get("TP목표가"))
-        sl_price = _safe_float(trade.get("SL목표가"))
-        max_hold = _safe_int(trade.get("최대보유일", 0))
+holdings = build_holdings(open_trades, state.prev_close)
+if holdings:
+    holdings_df = pd.DataFrame(holdings)
+    st.dataframe(holdings_df, width="stretch", hide_index=True)
 
-        if buy_qty > 0:
-            # Calculate current P&L
-            current_value = prev_close * buy_qty if prev_close else 0
-            cost_basis = buy_price * buy_qty if buy_price else 0
-            unrealized_pnl = current_value - cost_basis
-            unrealized_pct = ((prev_close / buy_price) - 1) * 100 if buy_price and prev_close else None
-
-            # Check expiration (trading days from engine's 보유기간)
-            hold_period = _safe_int(trade.get("보유기간(일)", 0))
-            days_left = None
-            if max_hold > 0 and hold_period > 0:
-                days_left = max_hold - hold_period
-
-            # Determine status
-            status = []
-            if tp_price and prev_close and prev_close >= tp_price:
-                status.append("TP도달")
-            if sl_price and prev_close and prev_close <= sl_price:
-                status.append("SL도달")
-            if days_left is not None and days_left <= 0:
-                status.append("만료")
-
-            holdings.append({
-                "매수일자": buy_date,
-                "매수가": f"${buy_price:.2f}" if buy_price else "-",
-                "수량": buy_qty,
-                "현재가": f"${prev_close:.2f}" if prev_close else "-",
-                "평가손익": f"${unrealized_pnl:.2f}" if unrealized_pnl else "$0.00",
-                "수익률": f"{unrealized_pct:.1f}%" if unrealized_pct is not None else "-",
-                "TP": f"${tp_price:.2f}" if tp_price else "-",
-                "SL": f"${sl_price:.2f}" if sl_price else "-",
-                "잔여일": days_left if days_left is not None else "-",
-                "상태": ", ".join(status) if status else "보유중",
-            })
-
-    if holdings:
-        holdings_df = pd.DataFrame(holdings)
-        st.dataframe(holdings_df, width="stretch", hide_index=True)
-
-        # Summary
-        total_qty = sum(h["수량"] for h in holdings)
-        st.caption(f"총 보유 수량: {total_qty}주 | 보유 종목: {ui_values['target']}")
-    else:
-        st.write("보유 중인 포지션이 없습니다.")
+    total_qty = sum(h["수량"] for h in holdings)
+    st.caption(f"총 보유 수량: {total_qty}주 | 보유 종목: {ui_values['target']}")
 else:
     st.write("보유 중인 포지션이 없습니다.")
 
@@ -878,333 +699,37 @@ if market_started:
     st.subheader(f"오늘({today}) 마감 시 실행될 LOC 주문 시트")
     st.caption("아래 주문들은 오늘 장 마감(4:00 PM EST)에 실행됩니다.")
 else:
-    st.subheader(f"다음 거래일 LOC 주문 시트")
+    st.subheader("다음 거래일 LOC 주문 시트")
 
-# Build unified order sheet (always use last_row data for LOC orders)
-order_sheet = []
-sl_order_sheet = []  # displayed in a collapsible panel
+# Build order sheet via order_book_engine
+order_sheet, sl_order_sheet, spread_ctx = build_order_sheet(
+    open_trades,
+    state.prev_close,
+    state.current_cash,
+    state.tranche_budget,
+    state.current_mode,
+    ui_values,
+    allow_fractional,
+)
 
-# Add sell orders (TP and SL for each open position)
-if not open_trades.empty and prev_close:
-    for idx, trade in open_trades.iterrows():
-        buy_date = trade.get("매수일자", "")
-        buy_price = _safe_float(trade.get("매수체결가"))
-        buy_qty = _safe_int(trade.get("매수수량", 0))
-        tp_price = _safe_float(trade.get("TP목표가"))
-        sl_price = _safe_float(trade.get("SL목표가"))
-        max_hold = _safe_int(trade.get("최대보유일", 0))
-
-        if buy_qty > 0:
-            # Calculate days left (trading days from engine's 보유기간)
-            hold_period = _safe_int(trade.get("보유기간(일)", 0))
-            days_left = None
-            is_expiring = False
-            if max_hold > 0 and hold_period > 0:
-                days_left = max_hold - hold_period
-                is_expiring = days_left <= 0
-
-            # TP sell order
-            if tp_price and tp_price > 0:
-                tp_change = ((tp_price / buy_price) - 1) * 100 if buy_price else None
-                order_sheet.append({
-                    "구분": "매도 (TP)",
-                    "주문가": tp_price,
-                    "수량": buy_qty,
-                    "변화율": f"{tp_change:+.1f}%" if tp_change is not None else "-",
-                    "비고": f"매수일: {buy_date}, 매수가: ${buy_price:.2f}" if buy_price else ""
-                })
-
-            # SL sell order (render separately to reduce clutter)
-            if sl_price and sl_price > 0:
-                sl_change = ((sl_price / buy_price) - 1) * 100 if buy_price else None
-                sl_order_sheet.append({
-                    "구분": "매도 (SL)",
-                    "주문가": sl_price,
-                    "수량": buy_qty,
-                    "변화율": f"{sl_change:+.1f}%" if sl_change is not None else "-",
-                    "비고": f"매수일: {buy_date}, 매수가: ${buy_price:.2f}" if buy_price else ""
-                })
-
-            # Expiration sell order (if near expiration)
-            if is_expiring:
-                order_sheet.append({
-                    "구분": "매도 (만료)",
-                    "주문가": prev_close,
-                    "수량": buy_qty,
-                    "변화율": f"{((prev_close / buy_price) - 1) * 100:+.1f}%" if buy_price and prev_close else "-",
-                    "비고": f"잔여일: {days_left}일"
-                })
-
-_spread_ctx = None  # Context for spread generation (set in buy section, used after netting)
-
-# Add buy order (new tranche) + spread at lower prices
-if current_cash > 0 and tranche_budget and tranche_budget > 0:
-    mode_params = ui_values["defense_buy"] if current_mode == "defense" else ui_values["offense_buy"]
-    buy_limit_price = prev_close * (1 + mode_params / 100) if prev_close else None
-
-    if buy_limit_price and buy_limit_price > 0:
-        effective_budget = min(tranche_budget, current_cash)
-        tp_pct = ui_values["defense_tp"] if current_mode == "defense" else ui_values["offense_tp"]
-        sl_pct = ui_values["defense_sl"] if current_mode == "defense" else ui_values["offense_sl"]
-
-        # Base buy order at limit price
-        if allow_fractional:
-            base_qty = effective_budget / buy_limit_price
-        else:
-            base_qty = int(effective_budget // buy_limit_price)
-
-        if base_qty > 0:
-            new_tp = buy_limit_price * (1 + tp_pct / 100)
-            new_sl = buy_limit_price * (1 - sl_pct / 100) if sl_pct > 0 else None
-
-            order_sheet.append({
-                "구분": "매수",
-                "주문가": buy_limit_price,
-                "수량": base_qty,
-                "변화율": f"{mode_params:+.1f}%",
-                "비고": f"→ TP: ${new_tp:.2f}, SL: ${new_sl:.2f}" if new_sl else f"→ TP: ${new_tp:.2f}"
-            })
-
-            # Save context for spread generation (after netting determines reference price)
-            _spread_ctx = {
-                "buy_limit_price": buy_limit_price,
-                "effective_budget": effective_budget,
-                "base_qty": base_qty,
-                "tp_pct": tp_pct,
-                "sl_pct": sl_pct,
-            }
-
-# Apply netting: offset matching sell and base-buy quantities in-place
-# IMPORTANT: Netting only applies when sell_price <= buy_price (overlapping execution range)
-# LOC buy executes if close <= buy_price, LOC sell executes if close >= sell_price
-# Both can execute at the same close only when sell_price <= close <= buy_price
+# Apply netting
 netting_msg = ""
-netting_details: list[dict] = []  # tracks per-row netting for debugging
-netting_floor_price = None  # Price of netting "매수" scenario row
+netting_details: list[dict] = []
+netting_floor_price = None
 
 if enable_netting:
-    sell_indices = [i for i, r in enumerate(order_sheet) if r["구분"].startswith("매도")]
-    buy_index = next((i for i, r in enumerate(order_sheet) if r["구분"] == "매수"), None)
+    netting_result = apply_netting(order_sheet, state.prev_close, allow_fractional)
+    order_sheet = netting_result.order_sheet
+    netting_msg = netting_result.netting_msg
+    netting_details = netting_result.netting_details
+    netting_floor_price = netting_result.netting_floor_price
 
-    if buy_index is not None and sell_indices:
-        buy_price = float(order_sheet[buy_index]["주문가"])
-        total_buy_qty = float(order_sheet[buy_index]["수량"])
-        fmt_qty = (lambda q: f"{q:,.4f}") if allow_fractional else (lambda q: f"{int(q):,}")
-
-        # Only net sell orders where sell_price <= buy_price (overlapping range)
-        nettable_sell_indices = []
-        non_nettable_sell_indices = []
-        for i in sell_indices:
-            sell_price = float(order_sheet[i]["주문가"])
-            if sell_price <= buy_price:
-                nettable_sell_indices.append(i)
-            else:
-                non_nettable_sell_indices.append(i)
-
-        nettable_sell_qty = sum(float(order_sheet[i]["수량"]) for i in nettable_sell_indices)
-
-        # Save original sell info before netting for spread sell rows
-        pre_netting_sells = [
-            {
-                "구분": order_sheet[i]["구분"],
-                "주문가": float(order_sheet[i]["주문가"]),
-                "수량": float(order_sheet[i]["수량"]),
-                "변화율": order_sheet[i].get("변화율", "-"),
-                "비고": order_sheet[i].get("비고", ""),
-            }
-            for i in nettable_sell_indices
-        ]
-
-        if nettable_sell_qty > 0 and total_buy_qty > 0:
-            offset = min(nettable_sell_qty, total_buy_qty)
-
-            # Cash impact for nettable orders only
-            sell_amt = sum(float(order_sheet[i]["주문가"]) * float(order_sheet[i]["수량"]) for i in nettable_sell_indices)
-            buy_amt = buy_price * min(total_buy_qty, nettable_sell_qty)
-            cash_impact = sell_amt - buy_amt  # positive = inflow
-            cash_str = f"순 유입 ${cash_impact:,.2f}" if cash_impact >= 0 else f"순 유출 ${-cash_impact:,.2f}"
-
-            if total_buy_qty >= nettable_sell_qty:
-                # Buy side larger: reduce buy qty, remove nettable sell rows
-                net_buy = total_buy_qty - offset
-                if not allow_fractional:
-                    net_buy = int(net_buy)
-                for i in nettable_sell_indices:
-                    row = order_sheet[i]
-                    qty = float(row["수량"])
-                    netting_details.append({
-                        "매도": row["구분"],
-                        "매도가": float(row["주문가"]),
-                        "매수가": buy_price,
-                        "상쇄 수량": qty,
-                        "사유": f"매도가 ${float(row['주문가']):.2f} ≤ 매수가 ${buy_price:.2f}",
-                    })
-                    order_sheet[i] = None
-                if net_buy > 0:
-                    order_sheet[buy_index]["수량"] = net_buy
-                    max_sell_p = max(s["주문가"] for s in pre_netting_sells)
-                    order_sheet[buy_index]["비고"] = f"퉁치기 후 순매수 (종가 ${max_sell_p:.2f}~${buy_price:.2f})"
-                else:
-                    order_sheet[buy_index] = None
-                if net_buy > 0:
-                    netting_msg = f"퉁치기 적용: 매도 {fmt_qty(nettable_sell_qty)}주 상쇄 → 순매수 {fmt_qty(net_buy)}주 ({cash_str})"
-                else:
-                    netting_msg = f"퉁치기 적용: 매수·매도 {fmt_qty(total_buy_qty)}주 완전상쇄 ({cash_str})"
-            else:
-                # Sell side larger: remove buy row, reduce nettable sell rows sequentially
-                order_sheet[buy_index] = None
-                remaining = total_buy_qty
-                for i in nettable_sell_indices:
-                    row_qty = float(order_sheet[i]["수량"])
-                    reduction = min(row_qty, remaining)
-                    new_qty = row_qty - reduction
-                    remaining -= reduction
-                    if not allow_fractional:
-                        new_qty = int(new_qty)
-                    if reduction > 0:
-                        netting_details.append({
-                            "매도": order_sheet[i]["구분"],
-                            "매도가": float(order_sheet[i]["주문가"]),
-                            "매수가": buy_price,
-                            "상쇄 수량": reduction,
-                            "사유": f"매도가 ${float(order_sheet[i]['주문가']):.2f} ≤ 매수가 ${buy_price:.2f}",
-                        })
-                    if new_qty > 0:
-                        order_sheet[i]["수량"] = new_qty
-                    else:
-                        order_sheet[i] = None
-                    if remaining <= 0:
-                        break
-                # Update 비고 for remaining sell rows to show netting context
-                for i in nettable_sell_indices:
-                    if order_sheet[i] is not None:
-                        sp = float(order_sheet[i]["주문가"])
-                        order_sheet[i]["비고"] = f"퉁치기 후 순매도 (종가 ${sp:.2f}~${buy_price:.2f})"
-                net_sell = nettable_sell_qty - offset
-                netting_msg = f"퉁치기 적용: 매수 {fmt_qty(total_buy_qty)}주 상쇄 → 순매도 {fmt_qty(net_sell)}주 ({cash_str})"
-
-            # Note about non-nettable sells
-            if non_nettable_sell_indices:
-                non_nettable_qty = sum(float(order_sheet[i]["수량"]) for i in non_nettable_sell_indices if order_sheet[i] is not None)
-                if non_nettable_qty > 0:
-                    netting_msg += f" | 퉁치기 불가 매도 {fmt_qty(non_nettable_qty)}주 (매도가 > 매수가)"
-
-            order_sheet = [r for r in order_sheet if r is not None]
-
-            # Price-range netting spread: cumulative sum approach
-            # Sort sells by price, accumulate qty, compute net at each boundary
-            from collections import defaultdict
-            sell_groups: dict[float, float] = defaultdict(float)
-            for orig in pre_netting_sells:
-                sell_groups[orig["주문가"]] += orig["수량"]
-            sorted_sells = sorted(sell_groups.items())  # [(price, qty), ...]
-
-            cum_sell = 0.0
-            ranges: list[dict] = []
-
-            # ① Below all sell prices: only buy executes
-            min_sell_price = sorted_sells[0][0]
-            netting_floor_price = min_sell_price - 0.01
-            ranges.append({
-                "구분": "매수",
-                "주문가": netting_floor_price,
-                "수량": total_buy_qty,
-                "비고": f"종가 < ${min_sell_price:.2f} 시 매도미체결 → 전량매수",
-            })
-
-            # ② Each sell price boundary: cumulative sells increase
-            for sp, sq in sorted_sells:
-                cum_sell += sq
-                net = total_buy_qty - cum_sell
-                # Skip the range that matches the netted result
-                # (all sells active + buy active = already shown in order_sheet)
-                if sp == sorted_sells[-1][0]:
-                    continue
-                net_qty = abs(net)
-                if not allow_fractional:
-                    net_qty = int(net_qty)
-                if net > 0:
-                    next_sp = next(s for s, _ in sorted_sells if s > sp)
-                    ranges.append({
-                        "구분": "매수",
-                        "주문가": sp,
-                        "수량": net_qty,
-                        "비고": f"종가 ${sp:.2f}~${next_sp:.2f} 구간 (매도 {fmt_qty(cum_sell)}주 체결)",
-                    })
-                elif net < 0:
-                    next_sp = next(s for s, _ in sorted_sells if s > sp)
-                    ranges.append({
-                        "구분": "매도",
-                        "주문가": sp,
-                        "수량": net_qty,
-                        "비고": f"종가 ${sp:.2f}~${next_sp:.2f} 구간 (매도 {fmt_qty(cum_sell)}주 체결)",
-                    })
-
-            # ③ Above buy price: buy doesn't execute, all sells go through
-            total_sell_qty = cum_sell
-            if not allow_fractional:
-                total_sell_qty = int(total_sell_qty)
-            ranges.append({
-                "구분": "매도",
-                "주문가": buy_price + 0.01,
-                "수량": total_sell_qty,
-                "비고": f"종가 > ${buy_price:.2f} 시 매수미체결 → 전량매도",
-            })
-
-            # Add range rows to order sheet
-            for r in ranges:
-                qty = r["수량"]
-                if not allow_fractional:
-                    qty = int(qty)
-                pct = ((r["주문가"] / prev_close) - 1) * 100 if prev_close else 0
-                order_sheet.append({
-                    "구분": r["구분"],
-                    "주문가": r["주문가"],
-                    "수량": qty,
-                    "변화율": f"{pct:+.1f}%",
-                    "비고": r["비고"],
-                })
-
-# Generate spread buy orders (after netting to use correct reference price)
-if _spread_ctx is not None:
-    _ref_price = netting_floor_price if netting_floor_price else _spread_ctx["buy_limit_price"]
-    _eff_budget = _spread_ctx["effective_budget"]
-    _s_tp_pct = _spread_ctx["tp_pct"]
-    _s_sl_pct = _spread_ctx["sl_pct"]
-
-    if allow_fractional:
-        _ref_qty = _eff_budget / _ref_price
-    else:
-        _ref_qty = int(_eff_budget // _ref_price)
-
-    _max_spread = ui_values.get("spread_buy_levels", 5)
-    _s_step = ui_values.get("spread_buy_step", 1)
-    _min_drop_pct = -50.0
-
-    if _ref_qty > 0:
-        for _n in range(1, _max_spread + 1):
-            _incr = _n * _s_step
-            _sp_price = _eff_budget / (_ref_qty + _incr)
-
-            _drop = ((_sp_price / _ref_price) - 1) * 100
-            if _drop < _min_drop_pct:
-                break
-
-            _sp_tp = _sp_price * (1 + _s_tp_pct / 100)
-            _sp_sl = _sp_price * (1 - _s_sl_pct / 100) if _s_sl_pct > 0 else None
-            _pct = ((_sp_price / prev_close) - 1) * 100 if prev_close else 0
-
-            _note = f"TP: ${_sp_tp:.2f}"
-            if _sp_sl:
-                _note += f", SL: ${_sp_sl:.2f}"
-
-            order_sheet.append({
-                "구분": f"매수 (+{_incr}주)",
-                "주문가": _sp_price,
-                "수량": _s_step,
-                "변화율": f"{_pct:+.1f}%",
-                "비고": _note,
-            })
+# Generate spread buy orders
+if spread_ctx is not None:
+    spread_rows = build_spread_orders(
+        spread_ctx, netting_floor_price, state.prev_close, ui_values, allow_fractional,
+    )
+    order_sheet.extend(spread_rows)
 
 # Display order sheet
 if order_sheet:
@@ -1392,6 +917,6 @@ else:
     st.write("거래 내역이 없습니다.")
 
 st.caption(
-    f"이 페이지는 {start_date}부터 {last_date}까지 백테스트를 실행하여 "
+    f"이 페이지는 {start_date}부터 {state.last_date}까지 백테스트를 실행하여 "
     "현재 포지션과 다음 거래일 LOC 주문 계획을 계산합니다."
 )

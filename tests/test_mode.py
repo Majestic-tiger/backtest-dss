@@ -1,7 +1,7 @@
 """Tests for mode decision pure functions."""
 import pytest
 
-from dongpa_engine import (
+from engines.dongpa_engine import (
     ModeParams,
     StrategyParams,
     eval_rsi_conditions,

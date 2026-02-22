@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dongpa_engine import (
+from engines.dongpa_engine import (
     BacktestResult,
     CapitalParams,
     ModeParams,

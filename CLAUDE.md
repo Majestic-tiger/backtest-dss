@@ -17,7 +17,9 @@ Dongpa is a Streamlit-based backtesting application for the "동파법" (Dongpa 
 
 ### Main Modules
 
-**`dongpa_engine.py`** - Backtesting engine and core logic
+**`main.py`** - Streamlit entry point (landing page)
+
+**`engines/dongpa_engine.py`** - Backtesting engine and core logic
 - `run_backtest()`: Main backtest entry point (pure function)
 - `ModeParams`: Mode-specific parameters (buy_cond_pct, tp_pct, max_hold_days, slices, stop_loss_pct)
 - `CapitalParams`: Capital management (`initial_cash` only)
@@ -25,18 +27,27 @@ Dongpa is a Streamlit-based backtesting application for the "동파법" (Dongpa 
 - Signal helpers: `wilder_rsi()`, `to_weekly_close()`, `cross_up()`, `cross_down()`
 - Monetary precision helpers: `money()`, `to_decimal()` for 2-decimal rounding
 
-**`backtest.py`** - Main Streamlit dashboard
+**`engines/order_book_engine.py`** - Pure business logic for the LOC order book
+- `extract_state()`, `build_holdings()`, `build_order_sheet()`, `apply_netting()`, `build_spread_orders()`
+
+**`engines/dongpa_optuna.py`** - Optuna optimizer engine
+- `OptunaConfig`, `run_optuna()`, `extract_results()`, `narrow_config()`
+
+**`ui/common.py`** - Shared UI utilities (navigation, settings I/O, strategy params builder)
+
+**`ui/charts.py`** - Equity vs price chart building
+
+**`pages/1_backtest.py`** - Main Streamlit backtest dashboard
 - User interface for configuring strategy parameters
 - Displays equity curves, trade journals, and summary metrics
 - Handles data download from Yahoo Finance via yfinance
-- Computes Buy & Hold comparison and trade statistics
-- Saves results to `outputs/` directory (gitignored)
 
-**`pages/2_orderBook.py`** - LOC order schedule generator
+**`pages/2_order_book.py`** - LOC order schedule generator
 - Real-time order planning based on latest market data
 - Persists settings to `config/strategy.json` + `config/personal_settings.json`
-- Maintains order history in `config/order_book_history.csv`
 - Displays next-day LOC order schedule
+
+**`pages/3_optuna.py`** - Optuna optimizer UI
 
 ### Data Flow
 
@@ -56,7 +67,7 @@ Dongpa is a Streamlit-based backtesting application for the "동파법" (Dongpa 
 ```bash
 make install          # Install Python dependencies (uv sync)
 make run-local        # Run Streamlit on localhost:8501 (no Docker)
-streamlit run backtest.py --server.address=0.0.0.0 --server.port=8501
+streamlit run main.py --server.address=0.0.0.0 --server.port=8501
 ```
 
 ### Docker Workflows
@@ -68,11 +79,9 @@ make build-dev       # Build dev image with live-reload (dongpa-dev:latest)
 make dev             # Run dev container with source mounted
 ```
 
-### Testing & Optimization
+### Testing
 ```bash
-python -m pytest                    # Run test suite (if tests/ exists)
-make optuna                         # Run Optuna optimizer
-python run_optuna.py                # Run Optuna optimizer locally
+python -m pytest                    # Run test suite
 ```
 
 ### Port Configuration
@@ -139,15 +148,20 @@ PORT=9000 make run
 
 ```
 backtest-dss/
-├── backtest.py              # Main Streamlit dashboard
-├── dongpa_engine.py         # Core backtest engine
-├── dongpa_optuna.py         # Optuna optimizer engine
-├── ui_common.py             # Shared UI utilities
-├── chart_utils.py           # Chart building
-├── run_optuna.py            # CLI for Optuna
+├── main.py                  # Streamlit entry point (landing page)
+├── engines/
+│   ├── __init__.py
+│   ├── dongpa_engine.py     # Core backtest engine
+│   ├── order_book_engine.py # LOC order book logic
+│   └── dongpa_optuna.py     # Optuna optimizer engine
+├── ui/
+│   ├── __init__.py
+│   ├── common.py            # Shared UI utilities
+│   └── charts.py            # Chart building
 ├── pages/
-│   ├── 2_orderBook.py      # LOC order scheduler
-│   └── 3_Optuna.py         # Optuna optimizer UI
+│   ├── 1_backtest.py        # Backtest dashboard
+│   ├── 2_order_book.py      # LOC order scheduler
+│   └── 3_optuna.py          # Optuna optimizer UI
 ├── tests/                   # pytest suite
 ├── config/
 │   ├── strategy.json        # Strategy parameters config
@@ -187,7 +201,7 @@ backtest-dss/
 - **Single position per tranche**: No pyramiding within a tranche
 
 ### Extending the Engine
-- **New indicators**: Add to `dongpa_engine.py` indicator section
+- **New indicators**: Add to `engines/dongpa_engine.py` indicator section
 - **Alternative modes**: Modify `decide_mode()` logic in backtester
 - **Custom exits**: Extend sell logic in main backtest loop
 - **Slippage**: Not modeled; add to `CapitalParams` if needed

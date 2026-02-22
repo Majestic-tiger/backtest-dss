@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from dongpa_engine import money, to_decimal, shares, shares_to_float, money_to_float
+from engines.dongpa_engine import money, to_decimal, shares, shares_to_float, money_to_float
 
 
 class TestToDecimal:

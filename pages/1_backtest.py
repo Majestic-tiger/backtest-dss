@@ -7,20 +7,21 @@ import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from dongpa_engine import (
-    ModeParams, CapitalParams, StrategyParams, run_backtest, summarize,
+from engines.dongpa_engine import (
+    run_backtest, summarize,
     compute_buy_and_hold_return, compute_equity_return, compute_trade_metrics,
     compute_mode_bands,
 )
-from chart_utils import (
+from ui.charts import (
     EquityPriceChartConfig,
     prepare_equity_price_frames,
     build_equity_price_chart,
 )
-from ui_common import (
+from ui.common import (
     CONFIG_DIR,
     DEFAULT_PARAMS,
     LOOKBACK_DAYS,
+    build_strategy_params,
     load_settings,
     render_navigation,
 )
@@ -359,84 +360,44 @@ if run:
         df_t.to_csv(target_path)
         df_m.to_csv(momo_path)
 
-        defense = ModeParams(
-            buy_cond_pct=cond1,
-            tp_pct=tp1,
-            max_hold_days=int(hold1),
-            slices=int(s1),
-            stop_loss_pct=float(sl1) if sl1 > 0 else None,
-        )
-        offense = ModeParams(
-            buy_cond_pct=cond2,
-            tp_pct=tp2,
-            max_hold_days=int(hold2),
-            slices=int(s2),
-            stop_loss_pct=float(sl2) if sl2 > 0 else None,
-        )
+        if mode_switch_strategy == "Golden Cross" and ma_short >= ma_long:
+            st.error("❌ Short MA는 Long MA보다 작아야 합니다!")
+            st.stop()
 
-        cap = CapitalParams(initial_cash=float(init_cash))
-
-        # Set mode switch strategy parameters
+        ui_values = {
+            "target": target,
+            "momentum": momentum,
+            "enable_netting": enable_netting,
+            "allow_fractional": allow_fractional,
+            "cash_limited_buy": cash_limited_buy,
+            "init_cash": init_cash,
+            "defense_slices": s1,
+            "defense_buy": cond1,
+            "defense_tp": tp1,
+            "defense_sl": sl1,
+            "defense_hold": hold1,
+            "offense_slices": s2,
+            "offense_buy": cond2,
+            "offense_tp": tp2,
+            "offense_sl": sl2,
+            "offense_hold": hold2,
+            "mode_switch_strategy": mode_switch_strategy,
+            "rsi_high_threshold": rsi_high_threshold,
+            "rsi_mid_high": rsi_mid_high,
+            "rsi_neutral": rsi_neutral,
+            "rsi_mid_low": rsi_mid_low,
+            "rsi_low_threshold": rsi_low_threshold,
+            "btc_ticker": btc_ticker,
+            "btc_lookback_days": btc_lookback_days,
+            "btc_threshold_pct": btc_threshold_pct,
+        }
         if mode_switch_strategy == "Golden Cross":
-            if ma_short >= ma_long:
-                st.error("❌ Short MA는 Long MA보다 작아야 합니다!")
-                st.stop()
-
-            params = StrategyParams(
-                target_ticker=target,
-                momentum_ticker=momentum,
-                mode_switch_strategy="ma_cross",
-                ma_short_period=int(ma_short),
-                ma_long_period=int(ma_long),
-                enable_netting=enable_netting,
-                allow_fractional_shares=allow_fractional,
-                cash_limited_buy=cash_limited_buy,
-                defense=defense,
-                offense=offense,
-            )
+            ui_values["ma_short"] = ma_short
+            ui_values["ma_long"] = ma_long
         elif mode_switch_strategy == "ROC":
-            params = StrategyParams(
-                target_ticker=target,
-                momentum_ticker=momentum,
-                mode_switch_strategy="roc",
-                roc_period=int(roc_period),
-                enable_netting=enable_netting,
-                allow_fractional_shares=allow_fractional,
-                cash_limited_buy=cash_limited_buy,
-                defense=defense,
-                offense=offense,
-            )
-        elif mode_switch_strategy == "BTC Overnight":
-            params = StrategyParams(
-                target_ticker=target,
-                momentum_ticker=momentum,
-                mode_switch_strategy="btc_overnight",
-                btc_lookback_days=int(btc_lookback_days),
-                btc_threshold_pct=float(btc_threshold_pct),
-                enable_netting=enable_netting,
-                allow_fractional_shares=allow_fractional,
-                cash_limited_buy=cash_limited_buy,
-                defense=defense,
-                offense=offense,
-            )
-        else:
-            # RSI mode (default)
-            params = StrategyParams(
-                target_ticker=target,
-                momentum_ticker=momentum,
-                mode_switch_strategy="rsi",
-                rsi_period=14,
-                rsi_high_threshold=float(rsi_high_threshold),
-                rsi_mid_high=float(rsi_mid_high),
-                rsi_neutral=float(rsi_neutral),
-                rsi_mid_low=float(rsi_mid_low),
-                rsi_low_threshold=float(rsi_low_threshold),
-                enable_netting=enable_netting,
-                allow_fractional_shares=allow_fractional,
-                cash_limited_buy=cash_limited_buy,
-                defense=defense,
-                offense=offense,
-            )
+            ui_values["roc_period"] = roc_period
+
+        params, cap = build_strategy_params(ui_values)
 
     result = run_backtest(df_t, df_m, params, cap, btc_data=df_btc)
     eq = result.equity

@@ -8,7 +8,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dongpa_optuna import (
+from engines.dongpa_optuna import (
     OptunaConfig,
     apply_to_config,
     extract_results,
@@ -18,7 +18,7 @@ from dongpa_optuna import (
     run_optuna,
     save_result_as_config,
 )
-from ui_common import render_navigation
+from ui.common import render_navigation
 
 def _best_score_from_study(study):
     """Compute best score from multi-objective study using stored user attrs."""

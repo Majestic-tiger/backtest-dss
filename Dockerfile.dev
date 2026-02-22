@@ -7,4 +7,4 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir streamlit yfinance pandas numpy optuna
 
-CMD ["streamlit", "run", "backtest.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["streamlit", "run", "main.py", "--server.address=0.0.0.0", "--server.port=8501"]
