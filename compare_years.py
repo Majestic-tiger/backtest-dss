@@ -4,9 +4,9 @@ import pandas as pd
 import yfinance as yf
 from dongpa_engine import (
     CapitalParams,
-    DongpaBacktester,
     ModeParams,
     StrategyParams,
+    run_backtest as _run_backtest,
     summarize,
 )
 
@@ -20,14 +20,12 @@ def download_data(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 def run_backtest(params: StrategyParams, capital: CapitalParams, target_df: pd.DataFrame, momo_df: pd.DataFrame) -> dict:
     """Run backtest and return results."""
-    backtester = DongpaBacktester(target_df, momo_df, params, capital)
-    results = backtester.run()
-    metrics = summarize(results["equity"])
+    result = _run_backtest(target_df, momo_df, params, capital)
+    metrics = summarize(result.equity)
     return {
-        "results": results,
         "metrics": metrics,
-        "equity": results["equity"],
-        "journal": results["journal"]
+        "equity": result.equity,
+        "journal": result.journal,
     }
 
 

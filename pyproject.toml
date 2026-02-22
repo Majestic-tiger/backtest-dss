@@ -11,4 +11,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest",
+    "pytest-cov>=7.0.0",
+]

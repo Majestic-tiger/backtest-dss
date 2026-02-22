@@ -13,11 +13,15 @@ import yfinance as yf
 
 from dongpa_engine import (
     CapitalParams,
-    DongpaBacktester,
     ModeParams,
     StrategyParams,
     _scalar,
     summarize,
+    run_backtest,
+    compute_indicators,
+    compute_buy_and_hold_return,
+    compute_equity_return,
+    compute_trade_metrics,
 )
 from chart_utils import (
     EquityPriceChartConfig,
@@ -722,10 +726,11 @@ if df_target_filtered.empty:
 
 strategy, capital = _collect_params(ui_values)
 # Pass full df_momo for proper RSI/MA warm-up; df_target_filtered defines backtest period
-backtester = DongpaBacktester(df_target_filtered, df_momo, strategy, capital, btc_data=df_btc)
-result = backtester.run()
-journal = result.get("journal", pd.DataFrame())
-trade_log = result.get("trade_log", pd.DataFrame())
+bt_result = run_backtest(df_target_filtered, df_momo, strategy, capital, btc_data=df_btc)
+# Also compute indicators for mode display in UI
+_, _indicators = compute_indicators(df_target_filtered, df_momo, strategy, btc_data=df_btc)
+journal = bt_result.journal
+trade_log = bt_result.trade_log
 
 if journal.empty:
     st.warning("거래 기록이 없습니다.")
@@ -756,8 +761,8 @@ else:
 
 # Get RSI value
 rsi_value = None
-if hasattr(backtester, "daily_rsi") and last_timestamp in backtester.daily_rsi.index:
-    rsi_raw = _scalar(backtester.daily_rsi.loc[last_timestamp])
+if _indicators.daily_rsi is not None and last_timestamp in _indicators.daily_rsi.index:
+    rsi_raw = _scalar(_indicators.daily_rsi.loc[last_timestamp])
     if rsi_raw is not None and not pd.isna(rsi_raw):
         rsi_value = float(rsi_raw)
 
@@ -777,8 +782,8 @@ if ui_values.get("mode_switch_strategy") == "Golden Cross":
     mode_line += f" (Golden Cross 전략: {ui_values['ma_short']}주 × {ui_values['ma_long']}주 MA)"
 elif ui_values.get("mode_switch_strategy") == "ROC":
     roc_val = None
-    if hasattr(backtester, "daily_roc") and last_timestamp in backtester.daily_roc.index:
-        roc_raw = _scalar(backtester.daily_roc.loc[last_timestamp])
+    if _indicators.daily_roc is not None and last_timestamp in _indicators.daily_roc.index:
+        roc_raw = _scalar(_indicators.daily_roc.loc[last_timestamp])
         if roc_raw is not None and not pd.isna(roc_raw):
             roc_val = float(roc_raw)
     if roc_val is not None:
@@ -787,8 +792,8 @@ elif ui_values.get("mode_switch_strategy") == "ROC":
         mode_line += f" (ROC {ui_values.get('roc_period', 4)}주)"
 elif ui_values.get("mode_switch_strategy") == "BTC Overnight":
     btc_sig_val = None
-    if hasattr(backtester, "daily_btc_signal") and last_timestamp in backtester.daily_btc_signal.index:
-        btc_sig_raw = _scalar(backtester.daily_btc_signal.loc[last_timestamp])
+    if _indicators.daily_btc_signal is not None and last_timestamp in _indicators.daily_btc_signal.index:
+        btc_sig_raw = _scalar(_indicators.daily_btc_signal.loc[last_timestamp])
         if btc_sig_raw is not None and not pd.isna(btc_sig_raw):
             btc_sig_val = float(btc_sig_raw)
     if btc_sig_val is not None:
@@ -1274,7 +1279,7 @@ if sl_order_sheet:
 st.markdown("---")
 
 # Equity curve and performance metrics
-equity = result.get("equity", pd.Series())
+equity = bt_result.equity
 if not equity.empty:
     st.subheader("Equity Curve vs Target Price")
     eq_df, combined_df = prepare_equity_price_frames(equity, df_target_filtered['Close'])
@@ -1290,29 +1295,9 @@ if not equity.empty:
     summary_metrics = summarize(equity)
 
     # Calculate Buy & Hold returns
-    target_hold_pct = None
-    if not df_target_filtered.empty and "Close" in df_target_filtered.columns:
-        closes = df_target_filtered["Close"].dropna()
-        if isinstance(closes, pd.DataFrame):
-            closes = closes.squeeze("columns")
-        if len(closes) > 1:
-            start_price = closes.iloc[0]
-            end_price = closes.iloc[-1]
-            target_hold_pct = ((float(end_price) / float(start_price)) - 1) * 100.0
-
-    momo_hold_pct = None
-    if not df_momo_filtered.empty and "Close" in df_momo_filtered.columns:
-        closes = df_momo_filtered["Close"].dropna()
-        if isinstance(closes, pd.DataFrame):
-            closes = closes.squeeze("columns")
-        if len(closes) > 1:
-            start_price = closes.iloc[0]
-            end_price = closes.iloc[-1]
-            momo_hold_pct = ((float(end_price) / float(start_price)) - 1) * 100.0
-
-    strategy_pct = None
-    if len(equity) > 1:
-        strategy_pct = float(((equity.iloc[-1] / equity.iloc[0]) - 1) * 100.0)
+    target_hold_pct = compute_buy_and_hold_return(df_target_filtered)
+    momo_hold_pct = compute_buy_and_hold_return(df_momo_filtered)
+    strategy_pct = compute_equity_return(equity)
 
     st.subheader("요약 지표")
     summary_top = st.columns(4)

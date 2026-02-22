@@ -18,9 +18,9 @@ import yfinance as yf
 
 from dongpa_engine import (
     CapitalParams,
-    DongpaBacktester,
     ModeParams,
     StrategyParams,
+    run_backtest,
     summarize,
 )
 
@@ -344,26 +344,23 @@ def create_objective(
 
         # --- Run backtests ---
         try:
-            train_bt = DongpaBacktester(train_target, train_momo, params, capital, btc_data=btc_data)
-            train_res = train_bt.run()
-            train_metrics = summarize(train_res["equity"])
+            train_res = run_backtest(train_target, train_momo, params, capital, btc_data=btc_data)
+            train_metrics = summarize(train_res.equity)
 
             # Early pruning: skip test if train CAGR is very negative
             train_cagr = train_metrics.get("CAGR", 0.0)
             if train_cagr < -0.5:
                 raise optuna.TrialPruned()
 
-            test_bt = DongpaBacktester(test_target, test_momo, params, capital, btc_data=btc_data)
-            test_res = test_bt.run()
-            test_metrics = summarize(test_res["equity"])
+            test_res = run_backtest(test_target, test_momo, params, capital, btc_data=btc_data)
+            test_metrics = summarize(test_res.equity)
 
             # --- Constraint checking ---
             if constraint_frames:
                 constraint_results = {}
                 for c_target, c_momo, c_range, max_mdd, min_cagr in constraint_frames:
-                    c_bt = DongpaBacktester(c_target, c_momo, params, capital, btc_data=btc_data)
-                    c_res = c_bt.run()
-                    c_metrics = summarize(c_res["equity"])
+                    c_res = run_backtest(c_target, c_momo, params, capital, btc_data=btc_data)
+                    c_metrics = summarize(c_res.equity)
                     c_label = f"{c_range[0]}~{c_range[1]}"
                     constraint_results[c_label] = c_metrics
 
@@ -562,9 +559,8 @@ def extract_results(
         # Run combined backtest
         try:
             params = StrategyParams(**params_dict)
-            combined_bt = DongpaBacktester(combined_target, combined_momo, params, capital, btc_data=btc_all)
-            combined_res = combined_bt.run()
-            combined_metrics = summarize(combined_res["equity"])
+            combined_res = run_backtest(combined_target, combined_momo, params, capital, btc_data=btc_all)
+            combined_metrics = summarize(combined_res.equity)
         except Exception:
             combined_metrics = {}
 

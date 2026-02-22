@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# Re-export from engine so existing callers keep working
+from dongpa_engine import compute_trade_metrics  # noqa: F401
 
 # ---------------------- Constants ----------------------
 
@@ -148,75 +150,3 @@ def get_available_config_files() -> list[Path]:
     return json_files
 
 
-# ---------------------- Trade Metrics ----------------------
-
-def compute_trade_metrics(
-    trade_log: pd.DataFrame | None,
-    initial_cash: float,
-) -> dict[str, float | int | None] | None:
-    """Compute realized trade metrics from trade log."""
-    if trade_log is None or trade_log.empty:
-        return None
-
-    closed = trade_log[trade_log["상태"] == "완료"].copy()
-    empty_result = {
-        "trade_count": 0,
-        "moc_count": 0,
-        "net_profit": 0.0,
-        "avg_hold_days": None,
-        "avg_return_pct": None,
-        "avg_gain_pct": None,
-        "avg_loss_pct": None,
-        "avg_gain": None,
-        "avg_loss": None,
-        "period_return_pct": None,
-    }
-    if closed.empty:
-        return empty_result
-
-    for col in ("실현손익", "보유기간(일)", "수익률(%)"):
-        if col in closed.columns:
-            closed[col] = pd.to_numeric(closed[col], errors="coerce")
-
-    closed = closed.dropna(subset=["실현손익"])
-    if closed.empty:
-        return empty_result
-
-    net_profit = float(closed["실현손익"].sum())
-    trade_count = int(len(closed))
-    moc_count = int((closed["청산사유"] == "MOC").sum()) if "청산사유" in closed.columns else 0
-    avg_hold = float(closed["보유기간(일)"].mean()) if "보유기간(일)" in closed.columns else None
-    avg_return_pct = None
-    if "수익률(%)" in closed.columns and closed["수익률(%)"].notna().any():
-        avg_return_pct = float(closed["수익률(%)"].dropna().mean())
-
-    gain_series = closed.loc[closed["실현손익"] > 0, "실현손익"]
-    loss_series = closed.loc[closed["실현손익"] < 0, "실현손익"]
-    gain_pct_series = pd.Series(dtype=float)
-    loss_pct_series = pd.Series(dtype=float)
-    if "수익률(%)" in closed.columns:
-        pct_series = pd.to_numeric(closed["수익률(%)"], errors="coerce")
-        gain_pct_series = pct_series[pct_series > 0]
-        loss_pct_series = pct_series[pct_series < 0]
-
-    avg_gain = float(gain_series.mean()) if not gain_series.empty else None
-    avg_loss = float(loss_series.mean()) if not loss_series.empty else None
-    avg_gain_pct = float(gain_pct_series.mean()) if not gain_pct_series.empty else None
-    avg_loss_pct = float(loss_pct_series.mean()) if not loss_pct_series.empty else None
-
-    period_return_pct = None
-    if initial_cash > 0:
-        period_return_pct = (net_profit / initial_cash) * 100.0
-
-    return {
-        "trade_count": trade_count,
-        "moc_count": moc_count,
-        "net_profit": net_profit,
-        "avg_hold_days": avg_hold,
-        "avg_return_pct": avg_return_pct,
-        "avg_gain_pct": avg_gain_pct,
-        "avg_loss_pct": avg_loss_pct,
-        "avg_gain": avg_gain,
-        "avg_loss": avg_loss,
-        "period_return_pct": period_return_pct,
-    }

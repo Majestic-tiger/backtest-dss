@@ -7,7 +7,11 @@ import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from dongpa_engine import (ModeParams, CapitalParams, StrategyParams, DongpaBacktester, summarize)
+from dongpa_engine import (
+    ModeParams, CapitalParams, StrategyParams, run_backtest, summarize,
+    compute_buy_and_hold_return, compute_equity_return, compute_trade_metrics,
+    compute_mode_bands,
+)
 from chart_utils import (
     EquityPriceChartConfig,
     prepare_equity_price_frames,
@@ -17,7 +21,6 @@ from ui_common import (
     CONFIG_DIR,
     DEFAULT_PARAMS,
     LOOKBACK_DAYS,
-    compute_trade_metrics,
     load_settings,
     render_navigation,
 )
@@ -40,37 +43,6 @@ def _prepare_defaults(saved: dict, year_start: date, today: date) -> dict:
         else:
             result[key] = raw
     return result
-
-
-def compute_buy_and_hold_return(df: pd.DataFrame) -> float | None:
-    if df.empty or "Close" not in df.columns:
-        return None
-    closes = df["Close"]
-    if isinstance(closes, pd.DataFrame):
-        closes = closes.squeeze("columns")
-    closes = closes.dropna()
-    if closes.empty:
-        return None
-    first_val = closes.iloc[0]
-    last_val = closes.iloc[-1]
-    try:
-        first_val = float(first_val)
-        last_val = float(last_val)
-    except (TypeError, ValueError):
-        return None
-    if first_val == 0:
-        return None
-    return ((last_val / first_val) - 1) * 100.0
-
-
-def compute_equity_return(series: pd.Series) -> float | None:
-    if series.empty:
-        return None
-    start = float(series.iloc[0])
-    end = float(series.iloc[-1])
-    if start == 0:
-        return None
-    return ((end / start) - 1) * 100.0
 
 
 st.set_page_config(page_title="backtest", layout="wide")
@@ -466,11 +438,10 @@ if run:
                 offense=offense,
             )
 
-    bt = DongpaBacktester(df_t, df_m, params, cap, btc_data=df_btc)
-    res = bt.run()
-    eq = res['equity']
-    journal = res['journal']
-    trade_log = res.get('trade_log')
+    result = run_backtest(df_t, df_m, params, cap, btc_data=df_btc)
+    eq = result.equity
+    journal = result.journal
+    trade_log = result.trade_log
     trade_metrics = compute_trade_metrics(trade_log, float(init_cash))
 
     st.success("완료! 가격 데이터는 outputs/ 아래 CSV로 저장되었습니다.")
@@ -485,17 +456,7 @@ if run:
     eq_df, combined_df = prepare_equity_price_frames(eq, df_t['Close'])
 
     # Extract offense/defense mode periods for background coloring
-    mode_bg = pd.DataFrame()
-    if not journal.empty and "모드" in journal.columns:
-        mj = journal[["거래일자", "모드"]].copy()
-        mj["거래일자"] = pd.to_datetime(mj["거래일자"])
-        mj["grp"] = (mj["모드"] != mj["모드"].shift(1)).cumsum()
-        mode_bg = mj.groupby("grp").agg(
-            start=("거래일자", "first"),
-            end=("거래일자", "last"),
-            mode=("모드", "first"),
-        ).reset_index(drop=True)
-        mode_bg["end"] = mode_bg["end"] + pd.Timedelta(days=1)
+    mode_bg = compute_mode_bands(journal)
 
     chart_config = EquityPriceChartConfig(target_label=target, log_scale=log_scale_enabled)
     chart = build_equity_price_chart(eq_df, combined_df, chart_config, mode_backgrounds=mode_bg)
