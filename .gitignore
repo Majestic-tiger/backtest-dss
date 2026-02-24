@@ -5,4 +5,6 @@ results/
 market_data/
 outputs/
 *.log
+.coverage
+.ruff_cache/
 

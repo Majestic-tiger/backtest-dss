@@ -17,11 +17,12 @@ The app writes downloaded pricing data under `outputs/` (ignored by git). Delete
 - `dongpa_engine.py` — vectorised LOC backtest core with weekly RSI mode switching.
 - `Dockerfile` / `Dockerfile.dev` — container definitions for production and mounted dev workflows.
 - `Makefile` — helper targets for local installs, Docker builds, shells, and dev loops.
-- `requirements.txt` — minimal dependency list (Streamlit, pandas, numpy, yfinance).
-- `AGENTS.md`, `dongpa_strategy.md`, `dongpa_visualize.md` — strategy notes and visual guides.
+- `pyproject.toml` — dependency list and project metadata.
+- `AGENTS.md` — repository conventions and guidelines.
+- `docs/dongpa_strategy.md`, `docs/dongpa_visualize.md` — strategy notes and visual guides.
 
 ## Development Notes
 
 - Use `make shell` after `make build` to drop into a bash shell inside the container.
 - Streamlit serves on `http://localhost:8501`; override the host port with `PORT=xxxx make run-local`.
-- The backtester enforces integer share sizes, LOC execution, and mode-dependent tranche management. Read `dongpa_strategy.md` for the complete ruleset.
+- The backtester enforces integer share sizes, LOC execution, and mode-dependent tranche management. Read `docs/dongpa_strategy.md` for the complete ruleset.

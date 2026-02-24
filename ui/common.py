@@ -9,13 +9,20 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# Re-export from engine so existing callers keep working
+from engines.dongpa_engine import (
+    CapitalParams,
+    ModeParams,
+    StrategyParams,
+    compute_trade_metrics,  # noqa: F401
+)
 
 # ---------------------- Constants ----------------------
 
 NAV_LINKS = [
-    ("backtest.py", "backtest"),
-    ("pages/2_orderBook.py", "orderBook"),
-    ("pages/3_Optuna.py", "Optuna"),
+    ("pages/1_backtest.py", "backtest"),
+    ("pages/2_order_book.py", "orderBook"),
+    ("pages/3_optuna.py", "Optuna"),
 ]
 
 SETTINGS_PATH = Path("config") / "strategy.json"
@@ -148,75 +155,71 @@ def get_available_config_files() -> list[Path]:
     return json_files
 
 
-# ---------------------- Trade Metrics ----------------------
+# ---------------------- Strategy Params Builder ----------------------
 
-def compute_trade_metrics(
-    trade_log: pd.DataFrame | None,
-    initial_cash: float,
-) -> dict[str, float | int | None] | None:
-    """Compute realized trade metrics from trade log."""
-    if trade_log is None or trade_log.empty:
-        return None
+# Maps UI radio labels to internal strategy keys
+_MODE_SWITCH_MAP = {
+    "RSI": "rsi",
+    "Golden Cross": "ma_cross",
+    "ROC": "roc",
+    "BTC Overnight": "btc_overnight",
+}
 
-    closed = trade_log[trade_log["상태"] == "완료"].copy()
-    empty_result = {
-        "trade_count": 0,
-        "moc_count": 0,
-        "net_profit": 0.0,
-        "avg_hold_days": None,
-        "avg_return_pct": None,
-        "avg_gain_pct": None,
-        "avg_loss_pct": None,
-        "avg_gain": None,
-        "avg_loss": None,
-        "period_return_pct": None,
+
+def build_strategy_params(ui_values: dict) -> tuple[StrategyParams, CapitalParams]:
+    """Build StrategyParams + CapitalParams from a flat UI-values dict.
+
+    Shared by ``backtest.py`` and ``pages/2_orderBook.py`` so that
+    the StrategyParams construction logic lives in exactly one place.
+    """
+    defense = ModeParams(
+        buy_cond_pct=ui_values["defense_buy"],
+        tp_pct=ui_values["defense_tp"],
+        max_hold_days=int(ui_values["defense_hold"]),
+        slices=int(ui_values["defense_slices"]),
+        stop_loss_pct=float(ui_values["defense_sl"]) if ui_values["defense_sl"] > 0 else None,
+    )
+    offense = ModeParams(
+        buy_cond_pct=ui_values["offense_buy"],
+        tp_pct=ui_values["offense_tp"],
+        max_hold_days=int(ui_values["offense_hold"]),
+        slices=int(ui_values["offense_slices"]),
+        stop_loss_pct=float(ui_values["offense_sl"]) if ui_values["offense_sl"] > 0 else None,
+    )
+
+    strategy_dict: dict = {
+        "target_ticker": ui_values["target"],
+        "momentum_ticker": ui_values["momentum"],
+        "enable_netting": ui_values.get("enable_netting", True),
+        "allow_fractional_shares": ui_values.get("allow_fractional", False),
+        "cash_limited_buy": ui_values.get("cash_limited_buy", False),
+        "defense": defense,
+        "offense": offense,
     }
-    if closed.empty:
-        return empty_result
 
-    for col in ("실현손익", "보유기간(일)", "수익률(%)"):
-        if col in closed.columns:
-            closed[col] = pd.to_numeric(closed[col], errors="coerce")
+    mode_switch = ui_values.get("mode_switch_strategy", "RSI")
+    internal_key = _MODE_SWITCH_MAP.get(mode_switch, "rsi")
+    strategy_dict["mode_switch_strategy"] = internal_key
 
-    closed = closed.dropna(subset=["실현손익"])
-    if closed.empty:
-        return empty_result
+    if internal_key == "ma_cross":
+        strategy_dict["ma_short_period"] = int(ui_values["ma_short"])
+        strategy_dict["ma_long_period"] = int(ui_values["ma_long"])
+    elif internal_key == "roc":
+        strategy_dict["roc_period"] = int(ui_values.get("roc_period", 4))
+    elif internal_key == "btc_overnight":
+        strategy_dict["btc_lookback_days"] = int(ui_values.get("btc_lookback_days", 1))
+        strategy_dict["btc_threshold_pct"] = float(ui_values.get("btc_threshold_pct", 0.0))
+    else:
+        # RSI (default)
+        strategy_dict["rsi_period"] = 14
+        strategy_dict["rsi_high_threshold"] = float(ui_values.get("rsi_high_threshold", 65.0))
+        strategy_dict["rsi_mid_high"] = float(ui_values.get("rsi_mid_high", 60.0))
+        strategy_dict["rsi_neutral"] = float(ui_values.get("rsi_neutral", 50.0))
+        strategy_dict["rsi_mid_low"] = float(ui_values.get("rsi_mid_low", 40.0))
+        strategy_dict["rsi_low_threshold"] = float(ui_values.get("rsi_low_threshold", 35.0))
 
-    net_profit = float(closed["실현손익"].sum())
-    trade_count = int(len(closed))
-    moc_count = int((closed["청산사유"] == "MOC").sum()) if "청산사유" in closed.columns else 0
-    avg_hold = float(closed["보유기간(일)"].mean()) if "보유기간(일)" in closed.columns else None
-    avg_return_pct = None
-    if "수익률(%)" in closed.columns and closed["수익률(%)"].notna().any():
-        avg_return_pct = float(closed["수익률(%)"].dropna().mean())
+    strategy = StrategyParams(**strategy_dict)
+    capital = CapitalParams(initial_cash=float(ui_values["init_cash"]))
+    return strategy, capital
 
-    gain_series = closed.loc[closed["실현손익"] > 0, "실현손익"]
-    loss_series = closed.loc[closed["실현손익"] < 0, "실현손익"]
-    gain_pct_series = pd.Series(dtype=float)
-    loss_pct_series = pd.Series(dtype=float)
-    if "수익률(%)" in closed.columns:
-        pct_series = pd.to_numeric(closed["수익률(%)"], errors="coerce")
-        gain_pct_series = pct_series[pct_series > 0]
-        loss_pct_series = pct_series[pct_series < 0]
 
-    avg_gain = float(gain_series.mean()) if not gain_series.empty else None
-    avg_loss = float(loss_series.mean()) if not loss_series.empty else None
-    avg_gain_pct = float(gain_pct_series.mean()) if not gain_pct_series.empty else None
-    avg_loss_pct = float(loss_pct_series.mean()) if not loss_pct_series.empty else None
-
-    period_return_pct = None
-    if initial_cash > 0:
-        period_return_pct = (net_profit / initial_cash) * 100.0
-
-    return {
-        "trade_count": trade_count,
-        "moc_count": moc_count,
-        "net_profit": net_profit,
-        "avg_hold_days": avg_hold,
-        "avg_return_pct": avg_return_pct,
-        "avg_gain_pct": avg_gain_pct,
-        "avg_loss_pct": avg_loss_pct,
-        "avg_gain": avg_gain,
-        "avg_loss": avg_loss,
-        "period_return_pct": period_return_pct,
-    }
